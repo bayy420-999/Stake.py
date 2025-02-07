@@ -1,0 +1,36 @@
+{
+    "strategy": {
+        "name": "martingale",
+        "base_bet": "MIN_BET_AMOUNT",
+        "chance": 49.5,
+        "rules": [
+            {
+                "on": {
+                "every": {
+                    "n_times": 1,
+                    "var": "LOSSES"
+                    }
+                },
+                "do": {
+                    "increase": {
+                        "var": "BET_AMOUNT",
+                        "by": 100
+                    }
+                }
+            },
+            {
+                "on": {
+                "every_streak_of": {
+                    "n_times": 1,
+                    "var": "WINS"
+                    }
+                },
+                "do": {
+                    "reset": {
+                        "var": "BET_AMOUNT"
+                    }
+                }
+            }
+        ]
+    }
+}
