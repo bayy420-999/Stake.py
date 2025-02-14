@@ -3,22 +3,45 @@ from __future__ import annotations
 import os
 import time
 import requests
+from tenacity import (
+    retry,
+    wait_exponential,
+    retry_if_exception_type,
+    stop_after_attempt
+)
+from requests.exceptions import ConnectionError, JSONDecodeError
 from rich import print
 from dotenv import load_dotenv
-from typing import Self, Optional
-#from strategy import Every
+from typing import Self, Optional, Callable
 from .errors import InsufficientBalanceError, InsignificantBetError
 from .models import (
     Game,
     User,
     Currency,
-    DiceRoll,
     DiceState,
+    LimboState,
     BetInfo,
-    TargetCondition,
-    QUERIES
+    DiceTargetCondition,
+    QUERIES,
+    Balance,
+    Available,
+    Vault
 )
 
+retry_predicates = (
+    retry_if_exception_type(ConnectionError) |
+    retry_if_exception_type(JSONDecodeError)
+)
+
+def print_attempt(retry_state):
+    print('[red][bold]Error occured during function call.[/red][/bold]')
+    print(f'Sleep for {int(retry_state.upcoming_sleep)} secs')
+    print(f'Retrying for the {retry_state.attempt_number} attempts')
+
+API_ERROR_TYPES = {
+    'insufficientBalance': InsufficientBalanceError,
+    'insignificantBet': InsignificantBetError
+}
 
 class Client:
     STAKE_API_URL = 'https://stake.krd/_api/graphql'
@@ -41,21 +64,37 @@ class Client:
 
     def _get_enum(
         self: Self,
-        enum_type: Game | Currency | Condition,
+        enum_type: Game | Currency | DiceTargetCondition,
         key: str
-    ) -> Game | Currency | Condition:
+    ) -> Game | Currency | DiceTargetCondition:
         try:
             return enum_type.__members__[key.upper()]
         except KeyError:
             raise
  
-    def _construct_response(
+    def _disable_ssl_verification(self):
+        from requests.packages.urllib3.exceptions import InsecureRequestWarning
+        requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+
+        self._session.verify = False
+        print('Warning: InsecureRequestWarning disabled.')
+
+    @retry(
+        retry=retry_predicates,
+        wait=wait_exponential(multiplier=1, min=1, max=16),
+        stop=stop_after_attempt(10),
+        before_sleep=print_attempt
+    )
+    def _get_json_response(
         self: Self,
-        json_response: dict[str, str]
-    ) -> BetInfo:
+        json_data: dict[str, str]
+    ) -> dict[str, str]:
+        response = self._session.post(self.STAKE_API_URL, json=json_data)
+        return response.json()
+
+    def _get_data(self, json_response) -> dict[str, str]:
         match json_response:
-            case {
-                'errors': [
+            case {'errors': [
                     {
                         'errorType': error_type,
                         'message': message
@@ -63,46 +102,71 @@ class Client:
                     *errors
                 ]
             }:
-                if error_type == 'insufficientBalance':
-                    raise InsufficientBalanceError(message)
-                if error_type == 'insignificantBet':
-                    raise InsignificantBetError(message)
-            case {'data': {'diceRoll': data}}:
-                bet_id = data['id']
-                active = data['active']
-                payout_multiplier = data['payoutMultiplier']
-                amount_multiplier = data['amountMultiplier']
-                amount = data['amount']
-                payout = data['payout']
-                updated_at = data['updatedAt']
-                currency = self._get_enum(Currency, data['currency'])
-                game = self._get_enum(Game, data['game'])
-                user = User(
-                    id=data['user']['id'],
-                    name=data['user']['name']
-                )
-                state = DiceState(
-                    target=data['state']['target'],
-                    result=data['state']['result'],
-                    target_condition=self._get_enum(TargetCondition, data['state']['condition'])
-                )
-                data = DiceRoll(
-                    id=bet_id,
-                    active=active,
-                    payout_multiplier=payout_multiplier,
-                    amount_multiplier=amount_multiplier,
-                    amount=amount,
-                    payout=payout,
-                    updated_at=updated_at,
-                    currency=currency,
-                    game=game,
-                    user=user,
-                    state=state
+                raise API_ERROR_TYPES[error_type](message)
+            case {'data': {'user': {'balances': balances}}}:
+                return list(map(self._construct_balance, balances))
+            case {'data': data}:
+                return self._construct_bet_info(data)
+            case _: raise Exception('What u do bro?!?!?!')
+
+    def _construct_balance(self, balance):
+        match balance:
+            case {
+                'available': {
+                    'amount': available_amount,
+                    'currency': available_currency
+                },
+                'vault': {
+                    'amount': vault_amount,
+                    'currency': vault_currency
+                }
+            }:
+                return Balance(
+                    available=Available(
+                        amount=available_amount,
+                        currency=available_currency
+                    ),
+                    vault=Vault(
+                        amount=vault_amount,
+                        currency=vault_currency
+                    )
                 )
 
-                return BetInfo(
-                    data=data
+    def _construct_bet_info(
+        self: Self,
+        data: dict[str, str]
+    ) -> BetInfo:
+        game, bet_info = data.popitem()
+ 
+        match game:
+            case 'limboBet':
+                state = LimboState(
+                    result=bet_info['state']['result'],
+                    multiplier_target=bet_info['state']['multiplierTarget']
                 )
+            case 'diceRoll':
+                state = DiceState(
+                    target=bet_info['state']['target'],
+                    result=bet_info['state']['result'],
+                    dice_target_condition=bet_info['state']['TargetCondition']
+                )
+
+        return BetInfo(
+            id=bet_info['id'],
+            active=bet_info['active'],
+            payout_multiplier=bet_info['payoutMultiplier'],
+            amount_multiplier=bet_info['amountMultiplier'],
+            payout=bet_info['payout'],
+            amount=bet_info['amount'],
+            updated_at=bet_info['updatedAt'],
+            currency=self._get_enum(Currency, bet_info['currency']),
+            game=self._get_enum(Game, bet_info['game']),
+            user=User(
+                id=bet_info['user']['id'],
+                name=bet_info['user']['name']
+            ),
+            state=state
+        )
 
     @staticmethod
     def from_dotenv() -> Client:
@@ -117,47 +181,54 @@ class Client:
                 return Client(API_KEY, CF_CLEARANCE, CF_BM, CFUVID)
             case _: raise KeyError()
 
-
     def get_user_balances(self: Self) -> dict[str, str]:
-        try:
-            json_data = dict(
-                query=QUERIES['user_balances'],
-                operationName='UserBalances'
-            )
-            return self._session.post(self.STAKE_API_URL, json=json_data).json()
-        except Exception:
-            raise
+        json_data = dict(
+            query=QUERIES['user_balances'],
+            operationName='UserBalances'
+        )
+        
+        json_response = self._get_json_response(json_data)
+        return self._get_data(json_response)
+
 
     def dice_roll(
         self: Self,
-        amount: float,
-        currency: Currency,
-        chance: float,
-        target_condition: Condition,
+        amount: Optional[float]=0.00001,
+        currency: Optional[Currency]=Currency.USDT,
+        chance: Optional[float]=49.5,
+        dice_target_condition: Optional[DiceTargetCondition]=DiceTargetCondition.ABOVE,
         identifier: Optional[str]='PeLCm-dvHjrDsj-CeIKCk'
     ) -> BetInfo:
-        try:
-            json_data = dict(
-                query=QUERIES['dice_roll'],
-                variables=dict(
-                    amount=amount,
-                    currency=currency.value,
-                    target=chance if target_condition == TargetCondition.BELOW else 100 - chance,
-                    condition=target_condition.value,
-                    identifier=identifier
-                )
+        json_data = dict(
+            query=QUERIES['dice_roll'],
+            variables=dict(
+                amount=amount,
+                currency=currency.value,
+                target=chance if dice_target_condition == DiceTargetCondition.BELOW else 100 - chance,
+                condition=dice_target_condition.value,
+                identifier=identifier
             )
-            json_response = self._session.post(self.STAKE_API_URL, json=json_data).json()
-            #print(json_response)
-            return self._construct_response(json_response)
-        except Exception:
-            #print(json_response)
-            raise
-    
-def main():
-    client = Client.from_dotenv()
-if __name__ == '__main__':
-    main()
+        )
 
+        json_response = self._get_json_response(json_data)
+        return self._get_data(json_response)
 
+    def limbo_bet(
+        self: Self,
+        amount: Optional[float]=0.00001,
+        currency: Optional[Currency]=Currency.USDT,
+        multiplier_target: Optional[float]=2.0,
+        identifier: Optional[str]='PeLCm-dvHjrDsj-CeIKCk'
+    ) -> BetInfo:
+        json_data = dict(
+            query=QUERIES['limbo_bet'],
+            variables=dict(
+                amount=amount,
+                currency=currency.value,
+                multiplierTarget=multiplier_target,
+                identifier=identifier
+            )
+        )
 
+        json_response = self._get_json_response(json_data)
+        return self._get_data(json_response)

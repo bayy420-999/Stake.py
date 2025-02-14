@@ -14,9 +14,12 @@ from .models import (
     Currency,
     Modifiers,
     BetInfo,
-    TargetCondition
+    DiceTargetCondition
 )
-
+from .errors import (
+    InsufficientBalanceError,
+    InsignificantBetError
+)
 
 T = TypeVar('T')
 class Condition(Generic[T]):
@@ -39,7 +42,6 @@ class Every:
         return f'<Every object <predicate={self.predicate}> at {hex(id(self))}>'
 
     def __call__(self, bet_info):
-        print(bet_info)
         match self.var:
             case Var.BETS:
                 self._internal_counter += 1
@@ -72,6 +74,14 @@ class Reset:
                 modifiers.bet_amount = modifiers.base_bet
             case Var.CHANCE:
                 modifiers.chance = modifiers.base_chance
+
+class SwitchDiceTargetCondition:
+    def __call__(self, modifiers: Modifiers):
+        match modifiers.dice_target_condition:
+            case DiceTargetCondition.ABOVE:
+                modifiers.dice_target_condition = DiceTargetCondition.BELOW
+            case DiceTargetCondition.BELOW:
+                modifiers.dice_target_condition = DiceTargetCondition.ABOVE
 
 class Increase:
     def __init__(
@@ -114,7 +124,7 @@ class DiceStrategy:
         base_bet: Optional[int | float]=0.00001,
         base_chance: Optional[float]=49.5,
         currency: Optional[Currency]=Currency.USDT,
-        target_condition: Optional[TargetCondition]=TargetCondition.ABOVE
+        dice_target_condition: Optional[DiceTargetCondition]=DiceTargetCondition.ABOVE
     ) -> None:
         self._client = client
         self.modifiers = Modifiers(
@@ -122,7 +132,7 @@ class DiceStrategy:
             bet_amount=base_bet,
             base_chance=base_chance,
             chance=base_chance,
-            target_condition=target_condition
+            dice_target_condition=dice_target_condition
         )
         self.currency = currency
         self.rules = None
@@ -135,8 +145,11 @@ class DiceStrategy:
                     amount=self.modifiers.bet_amount,
                     currency=self.currency,
                     chance=self.modifiers.chance,
-                    target_condition=self.modifiers.target_condition
+                    dice_target_condition=self.modifiers.dice_target_condition
                 )
+
+                if not bet_info:
+                    continue
 
                 if rules:
                     for rule in rules:
@@ -145,5 +158,8 @@ class DiceStrategy:
                 print(bet_info)
                 #os.system('clear')
                 #time.sleep(0.1)
-            except Exception:
+            except (
+                InsufficientBalanceError,
+                InsignificantBetError
+            ) as error:
                 raise

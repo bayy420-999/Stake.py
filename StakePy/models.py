@@ -70,6 +70,48 @@ fragment CasinoGameDice on CasinoGameDice {
 }
 '''
 
+QUERIES['limbo_bet'] = '''
+mutation LimboBet(
+    $amount: Float!,
+    $multiplierTarget: Float!,
+    $currency: CurrencyEnum!,
+    $identifier: String!
+) {
+    limboBet(
+        amount: $amount
+        currency: $currency
+        multiplierTarget: $multiplierTarget
+        identifier: $identifier
+    ) {
+        ...CasinoBet
+        state {
+        ...CasinoGameLimbo
+        }
+    }
+}
+
+fragment CasinoBet on CasinoBet {
+    id
+    active
+    payoutMultiplier
+    amountMultiplier
+    amount
+    payout
+    updatedAt
+    currency
+    game
+    user {
+        id
+        name
+    }
+}
+
+fragment CasinoGameLimbo on CasinoGameLimbo {
+    result
+    multiplierTarget
+}
+'''
+
 class Var(StrEnum):
     BETS       = auto()
     WINS       = auto()
@@ -85,13 +127,29 @@ class Currency(StrEnum):
     USDT = auto()
     USDC = auto()
 
-class TargetCondition(StrEnum):
+class DiceTargetCondition(StrEnum):
     ABOVE = auto()
     BELOW = auto()
 
 class Game(StrEnum):
     DICE  = auto()
     LIMBO = auto()
+
+@dataclass
+class Available:
+    amount: float
+    currency: Currency
+
+@dataclass
+class Vault:
+    amount: float
+    currency: Currency
+
+
+@dataclass
+class Balance:
+    available: Available
+    vault    : Vault
 
 @dataclass
 class User:
@@ -102,25 +160,26 @@ class User:
 class DiceState:
     target          : float
     result          : float
-    target_condition: TargetCondition
+    dice_target_condition: DiceTargetCondition
 
 @dataclass
-class DiceRoll:
+class LimboState:
+    result           : float
+    multiplier_target: float
+
+@dataclass
+class BetInfo:
     id               : str
     active           : bool
     payout_multiplier: int
     amount_multiplier: int
-    amount           : float
     payout           : float
+    amount           : float
     updated_at       : str
     currency         : Currency
     game             : Game
     user             : User
-    state            : DiceState
-
-@dataclass
-class BetInfo:
-    data: DiceRoll
+    state            : DiceState | LimboState
 
 @dataclass
 class Statistics:
@@ -132,7 +191,7 @@ class Modifiers:
     bet_amount: float
     base_chance: float
     chance: float
-    target_condition: TargetCondition
+    dice_target_condition: DiceTargetCondition
 
     
     
