@@ -148,7 +148,7 @@ class Client:
                 state = DiceState(
                     target=bet_info['state']['target'],
                     result=bet_info['state']['result'],
-                    dice_target_condition=bet_info['state']['TargetCondition']
+                    dice_target_condition=bet_info['state']['condition']
                 )
 
         return BetInfo(

@@ -1,4 +1,4 @@
-
+from typing import Optional
 from enum import StrEnum, auto
 from dataclasses import dataclass
 
@@ -169,26 +169,37 @@ class LimboState:
 
 @dataclass
 class BetInfo:
-    id               : str
-    active           : bool
-    payout_multiplier: int
-    amount_multiplier: int
-    payout           : float
-    amount           : float
-    updated_at       : str
-    currency         : Currency
-    game             : Game
-    user             : User
-    state            : DiceState | LimboState
+    id               : Optional[str | None]=None
+    active           : Optional[bool | None]=None
+    payout_multiplier: Optional[int | None]=None
+    amount_multiplier: Optional[int | None]=None
+    payout           : Optional[float | None]=None
+    amount           : Optional[float | None]=None
+    updated_at       : Optional[str | None]=None
+    currency         : Optional[Currency | None]=None
+    game             : Optional[Game | None]=None
+    user             : Optional[User | None]=None
+    state            : Optional[DiceState | LimboState | None]=None
+
+    @property
+    def win(self):
+        return self.payout_multiplier > 1
+
 
 @dataclass
 class Statistics:
-    ...
+    balance: float
+    bets   : int
+    wins   : int
+    losses : int
+    profit : float
+    wagered: float
 
 @dataclass
-class Modifiers:
+class DiceModifiers:
     base_bet: float
     bet_amount: float
+    currency: Currency
     base_chance: float
     chance: float
     dice_target_condition: DiceTargetCondition
